@@ -36,9 +36,9 @@ interpolate = True # interpolate height integrated current on secs mesh grid (av
 laplacian = False # Only fit two parameters to describe the const. filed, to try to avoid the "frame". Should set extend=0 if attempting this. Does not seem to work as intended...
 extend = 4 # SECS padding "frames"
 singularity = 0.5 # how many grid cells to modulate
-l1 = 10**(-1.7) # reg parameter
+l1 = 10**(-0.2) # reg parameter
 l2 = 0#1e-1       # reg parameter
-lcurve = True  # Use to make plot to determine l1
+lcurve = False  # Use to make plot to determine l1
 profile_mlon = 90 # magnetic longitude of the lat. profile cut to show
 ###########################################
 
@@ -50,6 +50,8 @@ B0 = mu0*M/(4*np.pi*RE**3) # from e.g. https://agupubs.onlinelibrary.wiley.com/d
 dp = dipole.Dipole(dipole_pole=((90-11),289), B0=B0)
 
 # Load GEMINI grid and data
+# Update the path variable below. The simulation can be found on dropbox:
+# 'your_bcss_dropbox_path/Data/issi_team_506_gemini_run/aurora_EISCAT3D/'
 path = "/Users/jone/Dropbox (Personal)/uib/researcher/tmpfiles/aurora_EISCAT3D/"
 # sim: Instance of simulation object, contain the GEMINI grid (sim.xg) and the output 
 #      on this grid in sim.dat
@@ -86,7 +88,7 @@ m_df = m[1]
 if interpolate:
     fig,axs = plt.subplots(1,1,figsize=(10,7))
     pax = helpers.make_pax(axs, dp)
-    pax.ax.set_title('SECS fit vs. height integrated $J_{hor}$')
+    pax.ax.set_title('SECS fit vs. height integrated $J_{hor}$ from GEMINI')
     helpers.show_grids(sim.xg, gr.grid_l, pax, csgrid=True)
     # Plot the height integrated currents
     kk = 5

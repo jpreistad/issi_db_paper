@@ -290,7 +290,7 @@ def Lcurve(G, d, steps=10):
     GTG = G.T.dot(G)
     GTd = G.T.dot(d)
     gtg_mag = np.median(np.diagonal(GTG))
-    ls = np.linspace(-4,0,steps)
+    ls = np.linspace(-3,2,steps)
     resnorm = []
     modelnorm = []
     for l in ls:
