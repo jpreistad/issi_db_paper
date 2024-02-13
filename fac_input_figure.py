@@ -108,6 +108,6 @@ ax.text(0.,0.85,'D', transform=ax.transAxes, fontsize=14)
 # Adjust the layout
 fig.tight_layout()
 plt.subplots_adjust(wspace=0.3)  # Adjust the horizontal space between subplots
-fig.savefig('fac_input_figure.png')
+fig.savefig('./plots/fac_input_figure.png')
 # Show the plot
 plt.show()

@@ -12,25 +12,18 @@ ISSI team review paper on magnetic disturbances on ground.
 
 import sys
 sys.path.append('/Users/jone/BCSS-DAG Dropbox/Jone Reistad/git/DAG/src')
-sys.path.append('/Users/jone/BCSS-DAG Dropbox/Jone Reistad')
 import numpy as np
-import git.secs_3d as secs3d
+sys.path.append('/Users/jone/Dropbox (Personal)/uib/researcher/git/e3dsecs/')
+from e3dsecs import simulation, grid, data
 from scipy.linalg import lstsq
 import matplotlib.pyplot as plt
-import apexpy
-import matplotlib
-from secsy import cubedsphere
 from gemini3d.grid.convert import geomag2geog, geog2geomag
-import gemini3d.read as read
-import xarray as xr
-import time
 import secsy
 import helpers
 from matplotlib import colors, colorbar
 from scipy.interpolate import griddata
 import fac_input_to_matt
 import xarray as xr
-import polplot # https://github.com/klaundal/polplot
 import dipole # https://github.com/klaundal/dipole
 import gemini3d.magtools
 
@@ -38,98 +31,93 @@ import gemini3d.magtools
 #Global variables
 RE = 6371.2 #Earth radius in km
 maph = 110 # Height in km of SECS representation of height integrated currents
-ENU = False # Do heith integration in vertical direction, in contrast to field aligned
-laplacian = False
+ENU = True # Do heith integration in vertical direction, in contrast to field aligned
+interpolate = True # interpolate height integrated current on secs mesh grid (avoid singularity)
+laplacian = False # Only fit two parameters to describe the const. filed, to try to avoid the "frame". Should set extend=0 if attempting this. Does not seem to work as intended...
 extend = 4 # SECS padding "frames"
+singularity = 0.5 # how many grid cells to modulate
+l1 = 10**(-1.7) # reg parameter
+l2 = 0#1e-1       # reg parameter
+lcurve = True  # Use to make plot to determine l1
+profile_mlon = 90 # magnetic longitude of the lat. profile cut to show
+###########################################
+
+# According to the GEMINI docs, this is the centered dipole they use in GEMINI: 
+# https://zenodo.org/record/3903830/files/GEMINI.pdf
+M = 7.94e22 # magnetic moment in A/m^2
+mu0 = 4*np.pi*10**(-7)
+B0 = mu0*M/(4*np.pi*RE**3) # from e.g. https://agupubs.onlinelibrary.wiley.com/doi/epdf/10.1029/RG025i001p00001
+dp = dipole.Dipole(dipole_pole=((90-11),289), B0=B0)
 
 # Load GEMINI grid and data
-# path = "/Users/jone/BCSS-DAG Dropbox/Jone Reistad/projects/eiscat_3d/issi_team/aurora_EISCAT3D/"
-path = "/Users/jone/BCSS-DAG Dropbox/Jone Reistad/tmpfiles/aurora_EISCAT3D/"
-magdat=gemini3d.magtools.magframe(path+"magfields/20160303_15310.000000.h5")
-
-# xg, dat = secs3d.gemini_tools.read_gemini(path, timeindex=-1, estimate_E_field=True,
-                                    # maph=maph, dipolelib=True)
-# dat.to_netcdf(path+'temp_dat.nc')
-dat = xr.open_dataset(path+'temp_dat.nc')
-cfg = read.config(path)
-xg = read.grid(path)
-
-#Define CS grid to work with for SECS representation
-grid, _ = secs3d.gemini_tools.make_csgrid(xg, height=maph, crop_factor=0.67, #0.2
-                        resolution_factor=0.3, extend=extend, extend_ew=3.4, #0.25
-                        dlat = 1.5, dlon=-3, dipole_lompe=True, asymres=1.5)
+path = "/Users/jone/Dropbox (Personal)/uib/researcher/tmpfiles/aurora_EISCAT3D/"
+# sim: Instance of simulation object, contain the GEMINI grid (sim.xg) and the output 
+#      on this grid in sim.dat
+sim = simulation.simulation(path, maph=maph, timeindex=61)
+# gr:   Instance of the grid object. Contain two CS grids. gr.grid and gr.grid_l
+#       grid_l is the extended one, that is padded with # of "frames" as specified
+#       with the extend keyword. Besides that, the grids are identical in the interior.
+gr = grid.grid(sim, extend=extend, dlat=1.5, dlon=-3, resolution_factor=0.3, 
+               crop_factor=0.67, extend_ew=4.5, asymres=1.5, orientation=-28)
+daysec = sim.dat.time.dt.hour.values * 3600 + sim.dat.time.dt.minute.values*60
+ff = path+"magfields/20160303_%5i.000000.h5" % daysec
+magdat = gemini3d.magtools.magframe(ff) # The Biot-Savart integration data from GEMINI
 
 # Get height integrated currents
-Je, Jn, mlons, mlats = helpers.height_integtated_current(xg, dat, grid, ENU=ENU, maph=maph, interpolate=True)
-# plt.scatter(mlons, mlats, c=Je, vmin=-0.1, vmax=0.1, cmap='bwr')
-# plt.xlim(43,153)
-# plt.ylim(60,85)
-
+Je, Jn, glons, glats = helpers.height_integtated_current(sim, gr, ENU=ENU, maph=maph, 
+                                                         interpolate=interpolate)
 
 # Fit the height integrated current with CF + DF SECS
-# Use magnetic dipole coordinates 
-singularity = 0.5
-l1 = 1e-1
-lcurve = False
-m = helpers.fit_J(grid, Je, Jn, mlons, mlats, l1=l1, singularity=singularity, 
-                       laplacian=laplacian, extend=extend, lcurve = lcurve)
+m = helpers.fit_J(gr.grid_l, Je, Jn, glons, glats, l1=l1, l2=l2, singularity=singularity, 
+                       laplacian=laplacian, extend=extend, lcurve = lcurve, maph=maph)
+m_cf = m[0]
+m_df = m[1]
+#################################################
 
-if lcurve:
-    resnorm = m[0]
-    modelnorm = m[1]
-    ls = m[2]
-else:
-    m_cf = m[0]
-    m_df = m[1]
-if laplacian:
-    m_l = m[2]
 
-#Evaluate CF SECS representation.
-Jcf_e, Jcf_n, Jdf_e, Jdf_n, mlon_eval, mlat_eval = helpers.evalJ(grid, m_cf, m_df, 
-                    maph=maph, extend=extend, singularity=singularity)    
+##################################################
+# PLOTTING
+##################################################
+
+
+##################################################
+# Plot comparing height integrated currents from GEMINI with the fitted SECS current
+# The eval function always evaluate at the mesh locations, and only on the inner grid.
+if interpolate:
+    fig,axs = plt.subplots(1,1,figsize=(10,7))
+    pax = helpers.make_pax(axs, dp)
+    pax.ax.set_title('SECS fit vs. height integrated $J_{hor}$')
+    helpers.show_grids(sim.xg, gr.grid_l, pax, csgrid=True)
+    # Plot the height integrated currents
+    kk = 5
+    pax.quiver(gr.grid.lat_mesh.flatten()[::kk], gr.grid.lon_mesh.flatten()[::kk]/15, Jn[::kk], 
+            Je[::kk], color='blue', label='GEMINI', alpha=0.5)
+    Jcf_e, Jcf_n, Jdf_e, Jdf_n, lon, lat = helpers.evalJ(gr, m_cf, m_df, maph=maph)
+    Je_fit = Jcf_e + Jdf_e
+    Jn_fit = Jcf_n + Jdf_n
+    pax.quiver(gr.grid.lat_mesh.flatten()[::kk], gr.grid.lon_mesh.flatten()[::kk]/15, Jn_fit[::kk], 
+            Je_fit[::kk], color='red', label='SECS', alpha=0.5)
+    fig.savefig('./plots/secs_fit_currents.pdf')
+
 ########################################
-
-########################################
-# Plotting of SECS representation
+# Plot of SECS amplitudes vs GEMINI FAC
 fig,axs = plt.subplots(1,2,figsize=(10,5))
-left_lt = 20
-right_lt = 4
-minlat = 55
-
 #Colorbar
 cax = fig.add_axes((0.1,0.15,0.8,0.02))
-clim= 3e-7 #A/m2
+clim= 4e-6 #A/m2
 norm = colors.Normalize(vmin=-clim, vmax=clim)
 cb1 = colorbar.ColorbarBase(cax, cmap='bwr',
                             norm=norm,
                             orientation='horizontal')
 cb1.set_label('[$A/m^2$]')
-
 # SECS fit
-dp = dipole.Dipole(dipole_pole=((90-11),289))
-fac = (m_cf.reshape(grid.lon.shape)/grid.A)#[extend:-extend,extend:-extend]
-_mlat = grid.lat#[extend:-extend,extend:-extend]
-_mlon = grid.lon#[extend:-extend,extend:-extend]
-pax2 = polplot.Polarplot(axs[0], minlat = minlat, sector = str(left_lt) + '-' + str(right_lt))
-pax1 = polplot.Polarplot(axs[1], minlat = minlat, sector = str(left_lt) + '-' + str(right_lt))
-for pax in [pax1,pax2]:
-    pax.coastlines(linewidth = .4, color = 'grey')
-    # plot dipole latitude circles
-    for lat in np.r_[50:81:10]:
-        lon = np.linspace(0, 360, 360)
-        glat, glon, _, _ = dp.mag2geo(lat, lon, lat, lat)
-        pax.plot(glat, glon/15, color = 'C0', zorder = 1, linewidth = .4)
-    # plot dipole meridians
-    for lon in np.r_[0:351:30]:
-        lat = np.linspace(0, 90, 190)
-        glat, glon, _, _ = dp.mag2geo(lat, lon, lat, lat)
-        pax.plot(glat, glon/15, color = 'C0', zorder = 1, linewidth = .4)
-    # draw frame
-    pax.plot([minlat, 90], [left_lt, left_lt], color = 'black')
-    pax.plot([minlat, 90], [right_lt, right_lt], color = 'black')
-    pax.plot( np.full(100, minlat), np.linspace(left_lt, 24 + right_lt, 100), color = 'black')
-# csax = secsy.CSplot(axs[0],grid,gridtype='geo')
-glat, glon = dp.mag2geo(grid.lat, grid.lon)
+fac = (m_cf.reshape(gr.grid_l.lon.shape)/gr.grid_l.A)#[extend:-extend,extend:-extend]
+_mlat = gr.grid_l.lat#[extend:-extend,extend:-extend]
+_mlon = gr.grid_l.lon#[extend:-extend,extend:-extend]
+pax2 = helpers.make_pax(axs[0], dp)
+pax1 = helpers.make_pax(axs[1], dp)
+glat = gr.grid_l.lat
+glon = gr.grid_l.lon
 x_, y_ = pax1._latlt2xy(glat.reshape(fac.shape), glon.reshape(fac.shape)/15, ignore_plot_limits = False)
 iii = ~np.isfinite(x_)
 x_, y_ = pax1._latlt2xy(glat.reshape(fac.shape), glon.reshape(fac.shape)/15, ignore_plot_limits = True)
@@ -138,184 +126,243 @@ pax1.ax.pcolormesh(x_, y_, fac, cmap = plt.cm.bwr, vmin=-clim, vmax=clim)
 if ENU:
     pax1.ax.set_title('SECS fit @ %3i km to height integrated $J_{hor}$' % maph)
 else:
-    pax1.ax.set_title('SECS fit @ %3i km to height integrated $J_{\perp}$' % maph)
-# csax.contour(_mlon, _mlat, _mlat, colors='black')
-kk = 8
-glat, glon, Jdf_e, Jdf_n = dp.mag2geo(mlat_eval, mlon_eval, Jdf_e, Jdf_n)
-glat, glon, Jcf_e, Jcf_n = dp.mag2geo(mlat_eval, mlon_eval, Jcf_e, Jcf_n)
-# pax1.quiver(glat[::kk], glon[::kk]/15, Jdf_n[::kk], Jdf_e[::kk], color='blue', label='DF current', alpha=0.5)
-# pax1.quiver(glat[::kk], glon[::kk]/15, Jcf_n[::kk], Jcf_e[::kk], color='red', label='CF current', alpha=0.5)
-# pax1.ax.legend()
-glat, glon = dp.mag2geo(np.linspace(50,90,50), np.ones(50)*90)
+    pax1.ax.set_title('SECS amplitudes from fit of $J_{\perp}$ [A/m] @ %3i km' % maph)
+# Plot line along the lat-cut to use later
+glat, glon = dp.mag2geo(np.linspace(50,90,50), np.ones(50)*profile_mlon)
 pax1.plot(glat, glon/15, color='black')
-helpers.show_grids(xg, grid, pax1, csgrid=False)
-
-# Look at GEMINI output from specific height
-_glon, _glat = geomag2geog(np.radians(grid.lon), np.radians(90-grid.lat)) #returns in degrees
-datadict = secs3d.gemini_tools.sample_points(xg, dat, _glat.flatten(), _glon.flatten(), np.ones(_glon.size)*180)
-br, btheta, bphi = secs3d.secs3d.make_b_unitvectors(datadict['Bu'], 
-                -datadict['Bn'], datadict['Be'])
-fac = np.sum(np.array([datadict['ju'], -datadict['jn'], datadict['je']]) * 
-                np.array([br, btheta, bphi]), axis=0).reshape(grid.shape)
-glat, glon = dp.mag2geo(grid.lat, grid.lon)
+helpers.show_grids(sim.xg, gr.grid_l, pax1, csgrid=False)
+# GEMINI output from specific height
+_data = data.data(gr, sim, beams=False, points=True, lat_ev=gr.grid_l.lat.flatten(), 
+                  lon_ev=gr.grid_l.lon.flatten(), alt_ev=np.ones(gr.grid_l.lon.size)*180, 
+                  e3doubt_=False)
+datadict = _data.__dict__
+fac = _data.fac.reshape(gr.grid_l.shape)
+glat = gr.grid_l.lat
+glon = gr.grid_l.lon
 x_, y_ = pax2._latlt2xy(glat.reshape(fac.shape), glon.reshape(fac.shape)/15, ignore_plot_limits = False)
 iii = ~np.isfinite(x_)
 x_, y_ = pax2._latlt2xy(glat.reshape(fac.shape), glon.reshape(fac.shape)/15, ignore_plot_limits = True)
 fac[iii] = np.nan # filter facs where coordinates are not defined
 pax2.ax.pcolormesh(x_, y_, fac, cmap = plt.cm.bwr, vmin=-clim, vmax=clim)
-pax2.ax.set_title('FAC from GEMINI at 180 km')
-pot = datadict['Phitop'].reshape(grid.shape)
-helpers.show_grids(xg, grid, pax2)
+pax2.ax.set_title('FAC from GEMINI @ 180 km')
+pot = datadict['Phitop'].reshape(gr.grid_l.shape)
+helpers.show_grids(sim.xg, gr.grid_l, pax2)
 plt.tight_layout()
-fig.savefig('secs_fit_currents_new.pdf')
-# csax.contour(_mlon, _mlat, pot, colors='black')
-# csax.quiver(Jdf_e[::kk]+Jcf_e[::kk], Jdf_n[::kk]+Jcf_n[::kk], mlon_eval[::kk], mlat_eval[::kk], label='Total current (SECS)')
-# csax.ax.legend()
+fig.savefig('./plots/secs_fit_facs.pdf')
 
-############
-# Plot comparing height integrated currents from GEMINI with the fitted SECS current
-
-########################################
-# Magnetic field on ground
-theta = np.radians(90 - grid.lat)
-Bn, Bu = secs3d.gemini_tools.dipole_B(theta, height = maph)
-Be = np.zeros((Bn.shape))
-Ge_cf, Gn_cf, Gu_cf = secsy.get_CF_SECS_B_G_matrices_for_inclined_field(grid.lat_mesh.flatten(), 
-            grid.lon_mesh.flatten(), np.ones(grid.lon_mesh.flatten().size)*RE*1000, 
-            grid.lat.flatten(), grid.lon.flatten(), Be.flatten(), Bn.flatten(), 
-            Bu.flatten(), RI = RE * 1e3 + maph * 1e3)
-Ge_, Gn_, Gu_ = secsy.get_SECS_B_G_matrices(grid.lat_mesh.flatten(),
-            grid.lon_mesh.flatten(),
-            np.ones(grid.lon_mesh.flatten().size)*RE*1000,  
-            grid.lat.flatten(), grid.lon.flatten(), 
-            constant = 1./(4.*np.pi), RI=RE * 1e3 + maph * 1e3, 
-            current_type = 'divergence_free', singularity_limit=grid.Lres*0.5)
-sh = grid.lat_mesh.shape
-Be = Ge_.dot(m_df).reshape(sh)
-Bn = Gn_.dot(m_df).reshape(sh)
-Bu = Gu_.dot(m_df).reshape(sh)
-Be_cf = Ge_cf.dot(m_cf).reshape(sh)
-Bn_cf = Gn_cf.dot(m_cf).reshape(sh)
-Bu_cf = Gu_cf.dot(m_cf).reshape(sh)
-# datadict = {'mlat':grid.lat_mesh, 'mlon':grid.lon_mesh, 'Be_df':Be, 'Bn_df':Bn, 'Bu_df':Bu}
-# np.save('dB_paper_plotting.npy', datadict)
-# dd = np.load('dB_paper_plotting.npy',allow_pickle=True)
-#Plttotting
-fig,axs = plt.subplots(1,3,figsize=(8,3.5))
-#Colorbar
-cax = fig.add_axes((0.1,0.13,0.8,0.03))
-clim = 50
-norm = colors.Normalize(vmin=-clim, vmax=clim)
-cb1 = colorbar.ColorbarBase(cax, cmap='bwr',
-                            norm=norm,
-                            orientation='horizontal')
-cb1.set_label('[nT]')
-csax = secsy.CSplot(axs[0],grid,gridtype='geo')
-csax.pcolormesh(grid.lon_mesh, grid.lat_mesh, (Be+Be_cf)*1e9, cmap='bwr', vmin=-clim, vmax=clim)
-csax.ax.set_title('Be_df+cf on ground')
-csax = secsy.CSplot(axs[1],grid,gridtype='geo')
-csax.pcolormesh(grid.lon_mesh, grid.lat_mesh, (Bn+Bn_cf)*1e9, cmap='bwr', vmin=-clim, vmax=clim)
-csax.ax.set_title('Bn_df+cf on ground')
-csax = secsy.CSplot(axs[2],grid,gridtype='geo')
-csax.pcolormesh(grid.lon_mesh, grid.lat_mesh, (Bu+Bu_cf)*1e9, cmap='bwr', vmin=-clim, vmax=clim)
-csax.ax.set_title('Bu_df+cf on ground')
-kk = 4
-csax.quiver((Be+Be_cf).flatten()[::kk]*1e9, (Bn+Bn_cf).flatten()[::kk]*1e9, 
-            grid.lon_mesh.flatten()[::kk], grid.lat_mesh.flatten()[::kk], label='$B_{hor}$')
-csax.ax.legend()
-fig.tight_layout()
-# fig.savefig('df.png')
 
 ##################################################################
-################
-# Compare GEMINI FAC to the synthetic prescribed FACs
+# Compare GEMINI FAC to the SECS estimates of FACs along meridian
 plt.figure()
 centerlon = 105 # the longitudinal cenrte (in degrees) of SCW structure
 width = 90 # longitudinal width in degrees of SCW feature
-scaling = 10 # increase the resulting FAC magnitudes, since the fitted values are too small (AMPERE does not capture small scale stuff)
-_times = np.ones(1)*66 #temporal locations to evaluare for FAC [minutes]
+scaling = 16 # increase the resulting FAC magnitudes, since the fitted values are too small (AMPERE does not capture small scale stuff)
+duration = 20
+sigmat = 5
+_times = np.ones(1)*10 #temporal locations to evaluare for FAC [minutes]
 # _times = np.arange(0,200,100) #temporal locations to evaluare for FAC
 _mlats = np.linspace(50, 85, 2500) # mlats to evaluate
 _mlons = np.linspace(centerlon-width*0.5, centerlon+width*0.5, 10) # mlons to evaluate
 shape = (_times.size, _mlats.size, _mlons.size)
 times, mlats, mlons = np.meshgrid(_times, _mlats, _mlons, indexing='ij') # make 3D grid of locations
-fac = fac_input_to_matt.fac_input(times, mlons, mlats, centerlon=centerlon, width=width, scaling=10)
+fac = fac_input_to_matt.fac_input(times, mlons, mlats, centerlon=centerlon, width=width, scaling=scaling, 
+                                  duration=duration, sigmat=sigmat)
 _glon, _glat = geomag2geog(np.radians(mlons), np.radians(90-mlats)) #returns in degrees
-datadict = secs3d.gemini_tools.sample_points(xg, dat, _glat.flatten(), _glon.flatten(), np.ones(_glon.size)*180)
-br, btheta, bphi = secs3d.secs3d.make_b_unitvectors(datadict['Bu'], 
-                -datadict['Bn'], datadict['Be'])
-datadict['fac'] = np.sum(np.array([datadict['ju'], -datadict['jn'], datadict['je']]) * 
-                np.array([br, btheta, bphi]), axis=0)
-lonindex = 3
+_data = data.data(gr, sim, beams=False, points=True, lat_ev=_glat.flatten(), 
+                  lon_ev=_glon.flatten(), alt_ev=np.ones(_glon.flatten().size)*180, 
+                  e3doubt_=False)
+datadict = _data.__dict__
+lonindex = np.argmin(np.abs(_mlons - profile_mlon))
 # Map FAC pattern down to maph before plotting. Map from observed location (2) 
-# to the maph height (1)
+# to the maph height (1) using dipole formula
 r_2 = datadict['alt'] + RE
 r_1 = np.ones(r_2.size)*(maph + RE)
 colat_2 = np.radians(90 - mlats.flatten())
 colat_1 = np.arcsin(np.sin(colat_2) * np.sqrt(r_1/r_2))
 mlats_1 = np.degrees(np.pi/2 - colat_1).reshape(mlons.shape)
-plt.plot(mlats_1[0,:,lonindex],datadict['J1'].reshape(shape)[0,:,lonindex], label='GEMINI')
+plt.plot(mlats_1[0,:,lonindex],datadict['fac'].reshape(shape)[0,:,lonindex], label='GEMINI')
 # plt.plot(mlats[0,:,lonindex],fac.reshape(shape)[0,:,lonindex], label='Analytic expression')
 # SECS facs
-points = np.vstack((grid.lon.flatten(), grid.lat.flatten())).T
+phi, theta = geog2geomag(gr.grid_l.lon.flatten(), gr.grid_l.lat.flatten())
+points = np.vstack((np.degrees(phi), 90-np.degrees(theta))).T
 _mcf = griddata(points, m_cf, (mlons[0,:,:], mlats[0,:,:]), method='linear').flatten()
-_A = griddata(points, grid.A.flatten(), (mlons[0,:,:], mlats[0,:,:]), method='linear').flatten()
+_A = griddata(points, gr.grid_l.A.flatten(), (mlons[0,:,:], mlats[0,:,:]), method='linear').flatten()
 _fac = _mcf/_A
 plt.plot(mlats[0,:,lonindex],_fac.reshape(shape)[0,:,lonindex], label='SECS fit')
 plt.legend()
 plt.xlabel('mlat')
 plt.ylabel('FAC [A/m2]')
 plt.xlim(64,78)
-plt.ylim(-6e-7,2e-7)
+plt.ylim(-4e-6,1e-6)
 plt.title('FACs along mlon = %3i' % _mlons[lonindex])
-###################################
+plt.savefig('./plots/FAC_profile_fit_performance.pdf')
 
-########################################
-# Conductance maps
-_glon, _glat = geomag2geog(np.radians(mlon_eval), np.radians(90-mlat_eval)) #returns in degrees
-datadict = secs3d.gemini_tools.sample_points(xg, dat, _glat.flatten(), _glon.flatten(), np.ones(_glon.size)*maph)
-pot = datadict['Phitop']
-#interpolate nan values using scipy griddata
-real = np.isfinite(pot)
-phi, theta = geog2geomag(datadict['lon'], datadict['lat']) # degrees input, radians out 
-mlons = np.degrees(phi)
-mlats = 90 - np.degrees(theta)
-points = np.vstack((mlons[real], mlats[real])).T
-pot2d = griddata(points, pot[real], (grid.lon, grid.lat), method='nearest')
-De2, Dn2 = grid.get_Le_Ln()
-Ee = -De2.dot(pot2d.flatten())
-En = -Dn2.dot(pot2d.flatten())
-Emag2 = Ee**2 + En**2
-use = grid.ingrid(grid.lon_mesh.flatten(), grid.lat_mesh.flatten(), ext_factor=-extend)
-points = np.vstack((grid.lon_mesh.flatten()[use],grid.lat_mesh.flatten()[use])).T
-points = np.vstack((mlon_eval[real], mlat_eval[real])).T
-Je = griddata(points, Jcf_e[real]+Jdf_e[real], (grid.lon, grid.lat), method='nearest').flatten()
-Jn = griddata(points, Jcf_n[real]+Jdf_n[real], (grid.lon, grid.lat), method='nearest').flatten()
-SigmaH = (Je*En-Jn*Ee)/Emag2
-SigmaP = (Je*Ee + Jn*En)/Emag2
-fig = plt.figure(figsize=(10,4))
-cax = fig.add_axes((0.45,0.2,0.4,0.02))
-clim = 10
+##################################################################
+# Magnetic field on ground from SECS fit
+# Get magnetic field estimate at SECS node locations. Can not use GEMINI since the SECS grid
+# edges may extend beyond the simulation. Use Dipole module. 
+cdlat, cdlon = dp.geo2mag(gr.grid_l.lat.flatten(), gr.grid_l.lon.flatten())
+Bn_cd, Bu = dp.B(cdlat, np.ones(gr.grid_l.lon.size)*maph+RE)
+Be_cd = np.zeros(gr.grid_l.lon.size)
+gclat, gclon, Be, Bn = dp.mag2geo(cdlat, cdlon, Ae = Be_cd, An = Bn_cd)
+#_data = data.data(gr, sim, beams=False, points=True, lat_ev=gr.grid_l.lat.flatten(), 
+#                  lon_ev=gr.grid_l.lon.flatten(), alt_ev=np.ones(gr.grid_l.lon.size)*maph, 
+#                  e3doubt_=False)
+Ge_cf, Gn_cf, Gu_cf = secsy.get_CF_SECS_B_G_matrices_for_inclined_field(gr.grid.lat_mesh.flatten(), 
+            gr.grid.lon_mesh.flatten(), np.ones(gr.grid.lon_mesh.flatten().size)*RE*1000, 
+            gr.grid_l.lat.flatten(), gr.grid_l.lon.flatten(), Be, Bn, Bu, 
+            RI = RE * 1e3 + maph * 1e3)
+Ge_, Gn_, Gu_ = secsy.get_SECS_B_G_matrices(gr.grid.lat_mesh.flatten(),
+            gr.grid.lon_mesh.flatten(),
+            np.ones(gr.grid.lon_mesh.flatten().size)*RE*1000,  
+            gr.grid_l.lat.flatten(), gr.grid_l.lon.flatten(), 
+            constant = 1./(4.*np.pi), RI=RE * 1e3 + maph * 1e3, 
+            current_type = 'divergence_free', singularity_limit=gr.grid.Lres*0.5)
+sh = gr.grid.lat_mesh.shape
+Be = Ge_.dot(m_df).reshape(sh)
+Bn = Gn_.dot(m_df).reshape(sh)
+Bu = Gu_.dot(m_df).reshape(sh)
+Be_cf = Ge_cf.dot(m_cf).reshape(sh)
+Bn_cf = Gn_cf.dot(m_cf).reshape(sh)
+Bu_cf = Gu_cf.dot(m_cf).reshape(sh)
+#Plotting
+fig,axs = plt.subplots(1,3,figsize=(9,3))
+#Colorbar
+cax = fig.add_axes((0.1,0.15,0.8,0.02))
+clim = 300
 norm = colors.Normalize(vmin=-clim, vmax=clim)
 cb1 = colorbar.ColorbarBase(cax, cmap='bwr',
                             norm=norm,
                             orientation='horizontal')
+cb1.set_label('[nT]')
+csax = secsy.CSplot(axs[0],gr.grid,gridtype='geo')
+csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, (Be+Be_cf)*1e9, cmap='bwr', vmin=-clim, vmax=clim)
+csax.ax.set_title('Be ground, SECS')
+csax = secsy.CSplot(axs[1],gr.grid,gridtype='geo')
+csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, (Bn+Bn_cf)*1e9, cmap='bwr', vmin=-clim, vmax=clim)
+csax.ax.set_title('Bn ground, SECS')
+csax = secsy.CSplot(axs[2],gr.grid,gridtype='geo')
+csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, (Bu+Bu_cf)*1e9, cmap='bwr', vmin=-clim, vmax=clim)
+csax.ax.set_title('Bu ground, SECS')
+kk = 4
+csax.quiver((Be+Be_cf).flatten()[::kk]*1e9, (Bn+Bn_cf).flatten()[::kk]*1e9, 
+            gr.grid.lon_mesh.flatten()[::kk], gr.grid.lat_mesh.flatten()[::kk], label='$B_{hor}$')
+csax.ax.legend()
+fig.tight_layout()
+fig.savefig('./plots/dB_ground_from_SECS_currents.pdf')
+
+
+##################################################################
+# Magnetic field on ground from Biot-Savart
+_mlat = magdat['mlat']#[:-4]
+_mlon = magdat['mlon']
+mlat, mlon = np.meshgrid(_mlat, _mlon, indexing='ij')
+# Be_cd = magdat['Bphi'][0,:-4,:]*1e9
+# Bn_cd = -magdat['Btheta'][0,:-4,:]*1e9
+# Bu = magdat['Br'][0,:-4,:]*1e9
+# I have no idea why the following works. Some lats are >90 deg,
+# and why this 90 deg rotation? Flipping of phi/theta?
+Be_cd = np.rot90(magdat['Bphi'][0,:,:]*1e9,1)
+Bn_cd = np.rot90(-magdat['Btheta'][0,:,:]*1e9,1)
+Bu = np.rot90(magdat['Br'][0,:,:]*1e9,1)
+gclat, gclon, Be, Bn = dp.mag2geo(mlat.flatten(), mlon.flatten(), 
+                                  Ae = Be_cd.flatten(), An = Bn_cd.flatten())
+# Interpolate onto CS grid
+gclon = gclon.flatten()
+largelons = gclon>180
+gclon[largelons] = gclon[largelons]-360
+points = np.vstack((gclon, gclat.flatten())).T
+_Be = griddata(points, Be.flatten(), (gr.grid.lon_mesh, gr.grid.lat_mesh), method='linear')
+_Bn = griddata(points, Bn.flatten(), (gr.grid.lon_mesh, gr.grid.lat_mesh), method='linear')
+_Bu = griddata(points, Bu.flatten(), (gr.grid.lon_mesh, gr.grid.lat_mesh), method='linear')
+fig,axs = plt.subplots(1,3,figsize=(9,3))
+#Colorbar
+cax = fig.add_axes((0.1,0.15,0.8,0.02))
+clim = 300
+norm = colors.Normalize(vmin=-clim, vmax=clim)
+cb1 = colorbar.ColorbarBase(cax, cmap='bwr',
+                            norm=norm,
+                            orientation='horizontal')
+cb1.set_label('[nT]')
+csax = secsy.CSplot(axs[0],gr.grid,gridtype='geo')
+csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, (_Be), cmap='bwr', vmin=-clim, vmax=clim)
+csax.ax.set_title('Be ground, Biot-Savart')
+csax = secsy.CSplot(axs[1],gr.grid,gridtype='geo')
+csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, (_Bn), cmap='bwr', vmin=-clim, vmax=clim)
+csax.ax.set_title('Bn ground, Biot-Savart')
+csax = secsy.CSplot(axs[2],gr.grid,gridtype='geo')
+csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, (_Bu), cmap='bwr', vmin=-clim, vmax=clim)
+csax.ax.set_title('Bu ground, Biot-Savart')
+kk = 4
+csax.quiver((_Be).flatten()[::kk], (_Bn).flatten()[::kk], 
+            gr.grid.lon_mesh.flatten()[::kk], gr.grid.lat_mesh.flatten()[::kk], label='$B_{hor}$')
+csax.ax.legend()
+fig.tight_layout()
+fig.savefig('./plots/dB_ground_from_Biot-Savart.pdf')
+
+
+########################################
+# Conductance maps
+# As a sanity check, the conductance can be estimated from the height intgrated currents and
+# the E-field from GEMINI. This result can be compared with the height integrated conductance
+# from GEMINI
+Jcf_e, Jcf_n, Jdf_e, Jdf_n, lon, lat = helpers.evalJ(gr, m_cf, m_df, maph=maph)
+#Now make a new data object that contain the E-field from GEMINI at the same locations
+_data = data.data(gr, sim, beams=False, points=True, lat_ev=lat, 
+                  lon_ev=lon, alt_ev=np.ones(lon.size)*maph, 
+                  e3doubt_=False)
+Emag = np.sqrt(_data.Ee**2 + _data.En**2)
+Je = Jcf_e + Jdf_e
+Jn = Jcf_n + Jdf_n
+SigmaH = (Je*_data.En-Jn*_data.Ee)/Emag**2
+SigmaP = (Je*_data.Ee + Jn*_data.En)/Emag**2
+fig = plt.figure(figsize=(10,4))
+cax = fig.add_axes((0.45,0.1,0.4,0.01))
+clim = 25
+norm = colors.Normalize(vmin=0, vmax=clim)
+cmap='viridis'
+cb1 = colorbar.ColorbarBase(cax, cmap=cmap,
+                            norm=norm,
+                            orientation='horizontal')
 cb1.set_label('[$S$]')
-ax = fig.add_subplot(131)
-csax = secsy.CSplot(ax,grid,gridtype='geo')
-csax.contour(_mlon, _mlat, pot2d, colors='black')
-csax.quiver(Ee, En, grid.lon.flatten(), grid.lat.flatten(), label='E')
+ax = fig.add_subplot(231)
+csax = secsy.CSplot(ax,gr.grid,gridtype='geo')
+csax.contour(lon.reshape(gr.grid.lon_mesh.shape), 
+             lat.reshape(gr.grid.lon_mesh.shape), 
+             _data.Phitop.reshape(gr.grid.lon_mesh.shape), colors='black')
+kk=5
+csax.quiver(_data.Ee[::kk], _data.En[::kk], lon[::kk], lat[::kk], label='E')
 csax.ax.set_title('E and $\Phi$')
 csax.ax.legend()
-ax = fig.add_subplot(132)
-csax = secsy.CSplot(ax,grid,gridtype='geo')
-csax.pcolormesh(grid.lon_mesh, grid.lat_mesh, SigmaH.reshape(grid.shape), vmin=-10, vmax=10, cmap='bwr')
+ax = fig.add_subplot(232)
+csax = secsy.CSplot(ax,gr.grid,gridtype='geo')
+csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, SigmaH.reshape(gr.grid.lon_mesh.shape), 
+                norm=norm, cmap=cmap)
 csax.ax.set_title('$\Sigma_H=\dfrac{\\hat{r} \cdot (\\vec{J_h} \\times \\vec{E_h})}{E_h^2}$', fontsize=10)
-ax = fig.add_subplot(133)
-csax = secsy.CSplot(ax,grid,gridtype='geo')
-csax.pcolormesh(grid.lon_mesh, grid.lat_mesh, SigmaP.reshape(grid.shape), vmin=-10, vmax=10, cmap='bwr')
-csax.ax.set_title('$\Sigma_P = \dfrac{\\vec{J_h} \cdot \\vec{E_h})}{E_h^2}$', fontsize=10)
+ax = fig.add_subplot(233)
+csax = secsy.CSplot(ax,gr.grid,gridtype='geo')
+csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, SigmaP.reshape(gr.grid.lon_mesh.shape), 
+                norm=norm, cmap=cmap)
+csax.ax.set_title('$\Sigma_P = \dfrac{\\vec{J_h} \cdot \\vec{E_h}}{E_h^2}$', fontsize=10)
+if interpolate:
+    Je, Jn, SH, SP, glons, glats = helpers.height_integtated_current(sim, gr, ENU=ENU, 
+                                    maph=maph, interpolate=interpolate, conductance=True)
+    ax = fig.add_subplot(235)
+    csax = secsy.CSplot(ax,gr.grid,gridtype='geo')
+    csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, SH.reshape(gr.grid.lon_mesh.shape), 
+                    norm=norm, cmap=cmap)
+    csax.ax.set_title('$\Sigma_H$ from GEMINI', fontsize=10)
+    ax = fig.add_subplot(236)
+    csax = secsy.CSplot(ax,gr.grid,gridtype='geo')
+    csax.pcolormesh(gr.grid.lon_mesh, gr.grid.lat_mesh, SP.reshape(gr.grid.lon_mesh.shape), 
+                    norm=norm, cmap=cmap)
+    csax.ax.set_title('$\Sigma_P$ from GEMINI', fontsize=10)
+fig.savefig('./plots/conductance.pdf')
 
+
+
+###################################################################
+'''
 # Scatterplot of data fit
 #Input data
 d = np.hstack((Je,Jn))
@@ -356,3 +403,4 @@ ax = fig.add_subplot(121)
 ax.scatter(mlons[use], mlats[use], c=model_e, vmin=-0.1, vmax=0.1, cmap='bwr')
 ax = fig.add_subplot(122)
 ax.scatter(mlons[use], mlats[use], c=data_e[use], vmin=-0.1, vmax=0.1, cmap='bwr')
+'''

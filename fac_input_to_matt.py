@@ -6,9 +6,9 @@ Created on Mon Aug 21 14:28:53 2023
 @author: jone
 
 Function fac_input() provide FAC in units of A/m2 based on analyrical expressions, from
-inpur arguments (time, mlon, mlat). The other functions are helper functions.
+input arguments (time, mlon, mlat). The other functions are helper functions.
 A coefficient file fac_input_coefs.h5 is also needed, and should be located in 
-same directory as this file. Use example is shown at the end of the script.
+same directory as this file. An example is shown at the end of the script.
 
 """
 
@@ -185,31 +185,31 @@ def fac_input(t, mlon, mlat, duration=200, sigmat=20, centerlon=105, width=90,
 
 
 
-##################################
-# Example use
-##################################
+# ##################################
+# # Example use
+# ##################################
 
-# Set some parameters
-centerlon = 105 # the longitudinal cenrte (in degrees) of SCW structure
-width = 90 # longitudinal width in degrees of SCW feature
-scaling = 10 # increase the resulting FAC magnitudes, since the fitted values are too small (AMPERE does not capture small scale stuff)
-duration = 200 # duration of time to model, in minutes
-sigmat = 20 # Sigma of the Gaussian temporal modulation of the pattern [minutes]
+# # Set some parameters
+# centerlon = 105 # the longitudinal cenrte (in degrees) of SCW structure
+# width = 90 # longitudinal width in degrees of SCW feature
+# scaling = 10 # increase the resulting FAC magnitudes, since the fitted values are too small (AMPERE does not capture small scale stuff)
+# duration = 200 # duration of time to model, in minutes
+# sigmat = 20 # Sigma of the Gaussian temporal modulation of the pattern [minutes]
 
-# Make evaluation locations
-_times = np.arange(0,200,10) #temporal locations to evaluare for FAC [minuted]
-_mlats = np.linspace(50, 85, 800) # mlats to evaluate [degrees]
-_mlons = np.linspace(centerlon-width*0.5, centerlon+width*0.5, 100) # mlons to evaluate [degrees]
-shape = (_times.size, _mlats.size, _mlons.size)
-times, mlats, mlons = np.meshgrid(_times, _mlats, _mlons, indexing='ij') # make 3D grid of locations
-fac = fac_input(times, mlons, mlats, centerlon=centerlon, width=width, scaling=10) # [A/m2]
+# # Make evaluation locations
+# _times = np.arange(0,200,10) #temporal locations to evaluare for FAC [minuted]
+# _mlats = np.linspace(50, 85, 800) # mlats to evaluate [degrees]
+# _mlons = np.linspace(centerlon-width*0.5, centerlon+width*0.5, 100) # mlons to evaluate [degrees]
+# shape = (_times.size, _mlats.size, _mlons.size)
+# times, mlats, mlons = np.meshgrid(_times, _mlats, _mlons, indexing='ij') # make 3D grid of locations
+# fac = fac_input(times, mlons, mlats, centerlon=centerlon, width=width, scaling=10) # [A/m2]
 
-# Some plotting
-clim=4e-6 #A/m2
-tind = 10 # time index to show
-plt.figure()
-plt.pcolormesh(mlons[tind,:,:],mlats[tind,:,:],fac[tind,:,:], cmap='bwr', vmin=-clim, vmax=clim)
-plt.xlabel('mlon [deg]')
-plt.ylabel('mlat [deg]')
-plt.title('FAC at evaluation locations @ time index %i [$\mu A/m^2$]' % tind)
-plt.colorbar()
+# # Some plotting
+# clim=4e-6 #A/m2
+# tind = 10 # time index to show
+# plt.figure()
+# plt.pcolormesh(mlons[tind,:,:],mlats[tind,:,:],fac[tind,:,:], cmap='bwr', vmin=-clim, vmax=clim)
+# plt.xlabel('mlon [deg]')
+# plt.ylabel('mlat [deg]')
+# plt.title('FAC at evaluation locations @ time index %i [$\mu A/m^2$]' % tind)
+# plt.colorbar()
