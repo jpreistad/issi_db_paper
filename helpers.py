@@ -145,12 +145,7 @@ def height_integtated_current(sim, gr, ENU=False, maph=110, interpolate=True,
         lons[large] = lons[large] - 360
         lats = xg['glat'].flatten()[kij_s]
         Je, Jn, Ju, = gemini_vec_2_enu_vec(gemini_vec, lons, lats)# geographic components
-        J_enu_gg = np.vstack((Je,Jn,Ju)).T
-        # J_enu_gm = coordinates.enugg2enugm(J_enu_gg, lons, lats) # Convert from geographic to geomag components
-        Je = J_enu_gg[:,0]
-        Jn = J_enu_gg[:,1]
-        # mlons = np.degrees(xg['phi'].flatten()[kij_s])
-        # mlats = 90-np.degrees(xg['theta'].flatten()[kij_s])
+        # In the following, only the hor part of the field aligned integrated perp current is used
         glons = xg['glon'].flatten()[kij_s]
         small_lon = glons > 180
         glons[small_lon] = glons[small_lon] - 360
@@ -189,8 +184,9 @@ def height_integtated_current(sim, gr, ENU=False, maph=110, interpolate=True,
         _dat = data.data(gr, sim, beams=False, points=True, 
                   lat_ev=glats, lon_ev=glons, alt_ev=alts, 
                   e3doubt_=False)
-        je = _dat.je.reshape(glons.shape)
-        jn = _dat.jn.reshape(glons.shape)
+        # I suppose the heigth integration should be done only on the perp part of the current?
+        je = _dat.jperpe.reshape(glons.shape)
+        jn = _dat.jperpn.reshape(glons.shape)
         _altres = np.diff(_alts)
         _altres = np.abs(np.concatenate((np.array([_altres[0]]),_altres)))
         altres,_,__ = np.meshgrid(_altres, np.ones(Nlon), np.ones(Nlat), indexing='ij')

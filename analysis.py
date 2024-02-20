@@ -39,7 +39,7 @@ singularity = 0.5 # how many grid cells to modulate
 l1 = 10**(-0.2) # reg parameter
 l2 = 0#1e-1       # reg parameter
 lcurve = False  # Use to make plot to determine l1
-profile_mlon = 90 # magnetic longitude of the lat. profile cut to show
+profile_mlon = 120 #90 # magnetic longitude of the lat. profile cut to show
 ###########################################
 
 # According to the GEMINI docs, this is the centered dipole they use in GEMINI: 
@@ -60,7 +60,7 @@ sim = simulation.simulation(path, maph=maph, timeindex=61)
 #       grid_l is the extended one, that is padded with # of "frames" as specified
 #       with the extend keyword. Besides that, the grids are identical in the interior.
 gr = grid.grid(sim, extend=extend, dlat=1.5, dlon=-3, resolution_factor=0.3, 
-               crop_factor=0.67, extend_ew=4.5, asymres=1.5, orientation=-28)
+               crop_factor=0.67, extend_ew=4.5, asymres=1.5, orientation=-31)
 daysec = sim.dat.time.dt.hour.values * 3600 + sim.dat.time.dt.minute.values*60
 ff = path+"magfields/20160303_%5i.000000.h5" % daysec
 magdat = gemini3d.magtools.magframe(ff) # The Biot-Savart integration data from GEMINI
@@ -99,6 +99,7 @@ if interpolate:
     Jn_fit = Jcf_n + Jdf_n
     pax.quiver(gr.grid.lat_mesh.flatten()[::kk], gr.grid.lon_mesh.flatten()[::kk]/15, Jn_fit[::kk], 
             Je_fit[::kk], color='red', label='SECS', alpha=0.5)
+    pax.ax.legend()
     fig.savefig('./plots/secs_fit_currents.pdf')
 
 ########################################
@@ -195,7 +196,7 @@ plt.legend()
 plt.xlabel('mlat')
 plt.ylabel('FAC [A/m2]')
 plt.xlim(64,78)
-plt.ylim(-4e-6,1e-6)
+plt.ylim(-1e-6,5e-6)
 plt.title('FACs along mlon = %3i' % _mlons[lonindex])
 plt.savefig('./plots/FAC_profile_fit_performance.pdf')
 
@@ -360,49 +361,3 @@ if interpolate:
                     norm=norm, cmap=cmap)
     csax.ax.set_title('$\Sigma_P$ from GEMINI', fontsize=10)
 fig.savefig('./plots/conductance.pdf')
-
-
-
-###################################################################
-'''
-# Scatterplot of data fit
-#Input data
-d = np.hstack((Je,Jn))
-dataN = d.size//2
-data_e = d[0:dataN]
-data_n = d[dataN:2*dataN]
-
-#Model at input locations
-# phi, theta = geog2geomag(lons, lats) # degrees input, radians out 
-# mlons = np.degrees(phi)
-# mlats = 90 - np.degrees(theta)
-use = grid.ingrid(mlons, mlats, ext_factor=-extend)
-Ge_cf, Gn_cf = secsy.get_SECS_J_G_matrices(mlats[use], mlons[use],
-            grid.lat.flatten(), grid.lon.flatten(), constant = 1./(4.*np.pi), 
-            RI=RE * 1e3 + maph * 1e3, current_type = 'curl_free', 
-            singularity_limit=grid.Lres*0.5)
-G_pred = np.vstack((Ge_cf, Gn_cf))
-Jcf = G_pred.dot(m_cf)
-Ge_df, Gn_df = secsy.get_SECS_J_G_matrices(mlats[use], mlons[use],
-            grid.lat.flatten(), grid.lon.flatten(), constant = 1./(4.*np.pi), 
-            RI=RE * 1e3 + maph * 1e3, current_type = 'divergence_free', 
-            singularity_limit=grid.Lres*0.5)
-G_pred = np.vstack((Ge_df, Gn_df))
-Jdf = G_pred.dot(m_df)
-N = Ge_cf.shape[0]
-Jdf_e = Jdf[0:N]
-Jdf_n = Jdf[N:2*N]
-Jcf_e = Jcf[0:N]
-Jcf_n = Jcf[N:2*N]
-model_e = Jcf_e + Jdf_e
-model_n = Jcf_n + Jdf_n
-plt.scatter(data_e[use], model_e)
-plt.scatter(data_n[use], model_n)
-plt.hist(model_n-data_n[use])
-glons, glats = geomag2geog(np.radians(mlons[use]), np.radians(90-mlats[use])) #returns in degrees
-fig=plt.figure()
-ax = fig.add_subplot(121)
-ax.scatter(mlons[use], mlats[use], c=model_e, vmin=-0.1, vmax=0.1, cmap='bwr')
-ax = fig.add_subplot(122)
-ax.scatter(mlons[use], mlats[use], c=data_e[use], vmin=-0.1, vmax=0.1, cmap='bwr')
-'''
